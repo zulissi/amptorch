@@ -14,10 +14,10 @@ from skorch.callbacks import Checkpoint, EpochScoring
 
 from amptorch.gaussian import SNN_Gaussian
 from amptorch.skorch_model import AMP
-from amptorch.skorch_model.utils import target_extractor, energy_score, forces_score
+from amptorch.skorch_model.utils import target_extractor, energy_score, forces_score, train_end_load_best_loss
 from amptorch.data_preprocess import AtomsDataset, collate_amp
 from amptorch.model import FullNN, CustomMSELoss
-from amptorch.morse import morse_potential
+from amptorch.delta_models.morse import morse_potential
 
 
 __author__ = "Muhammed Shuaibi"
@@ -57,27 +57,28 @@ class AtomisticActiveLearning(Calculator):
     def train_calc(
         self,
         images,
-        Gs,
-        forcetraining,
-        cores,
-        criterion,
-        num_layers,
-        num_nodes,
-        force_coefficient,
-        learning_rate,
-        epochs,
-        train_split,
-        morse,
-        morse_params,
+        training_params,
     ):
+        Gs = training_params["Gs"]
+        morse = training_params["morse"]
+        morse_params = training_params["morse_params"]
+        forcetraining = training_params["forcetraining"]
+        cores = training_params["cores"]
+        optimizer = training_params["optimizer"]
+        batch_size = training_params["batch_size"]
+        criterion = training_params["criterion"]
+        num_layers = training_params["num_layers"]
+        num_nodes = training_params["num_nodes"]
+        force_coefficient = training_params["force_coefficient"]
+        learning_rate = training_params["learning_rate"]
+        epochs = training_params["epochs"]
+        train_split = training_params["test_split"]
+        shuffle = training_params["shuffle"]
+
         os.makedirs("./results/checkpoints", exist_ok=True)
         os.makedirs(self.file_dir, exist_ok=True)
 
         filename = self.filename
-
-        class train_end_load_best_valid_loss(skorch.callbacks.base.Callback):
-            def on_train_end(self, net, X, y):
-                net.load_params("./results/checkpoints/{}_params.pt".format(filename))
 
         cutoff = Gs["cutoff"]
         morse_data = None
@@ -105,7 +106,7 @@ class AtomisticActiveLearning(Calculator):
         fp_length = training_data.fp_length
         device = "cpu"
 
-        load_best_valid_loss = train_end_load_best_valid_loss()
+        load_best_valid_loss = train_end_load_best_loss(filename)
         torch.set_num_threads(1)
 
         if train_split == 0:
@@ -160,13 +161,12 @@ class AtomisticActiveLearning(Calculator):
             ),
             criterion=criterion,
             criterion__force_coefficient=force_coefficient,
-            optimizer=torch.optim.LBFGS,
-            optimizer__line_search_fn="strong_wolfe",
+            optimizer=optimizer,
             lr=learning_rate,
-            batch_size=len(training_data),
+            batch_size=batch_size,
             max_epochs=epochs,
             iterator_train__collate_fn=collate_amp,
-            iterator_train__shuffle=False,
+            iterator_train__shuffle=shuffle,
             iterator_valid__collate_fn=collate_amp,
             iterator_valid__shuffle=False,
             device=device,
@@ -213,20 +213,7 @@ class AtomisticActiveLearning(Calculator):
     def active_learner(
         self,
         generating_function,
-        al_convergence,
-        samples_to_retrain,
-        Gs,
-        forcetraining=True,
-        cores=10,
-        criterion=CustomMSELoss,
-        num_layers=3,
-        num_nodes=20,
-        force_coefficient=0.04,
-        learning_rate=1e-1,
-        epochs=300,
-        train_split=5,
-        morse=None,
-        morse_params=None,
+        training_params,
     ):
         """
         Active learning method that selects data points from a pool of data
@@ -253,76 +240,76 @@ class AtomisticActiveLearning(Calculator):
                 end_count, and interval. i.e. ase.io.read(filename,
                 "{}:{}:{}".format(start_count, end_count, interval))
 
-        al_convergence: Dict.
-            Dictionary of stopping criteria parameters. Currently only # of
-            iterations and spot verification is used:
+        training_params: Dict.
+            Dictionary of training parameters:
 
-                Iterations: {"method": "iter", "num_iterations": int}
-                    Where "num_iteratiosn" is the number of iterations the AL
-                    framework is run before termination.
-                Spot: {"method": "spot", "num2verify": int }
-                    Where "num2verify" is the number of points necessary to be randomly sampled
-                    and verified with DFT before convergence.
-        samples_to_retrain. integer.
-            Number of samples to query each iteration
-            of the active learning loop.
-        Gs: dictionary.
-            Dictionary of symmetry functions to be used for
-            fingerprinting.
-        morse: boolean
-            Delta-ML model with morse potential to be used.
-        morse_params: dictionary
-            If morse True, define morse potential parameters for all elements in
-            system.
-        forcetraining: boolean
-            Use forces in training scheme alongside energies.
-        force_coefficient: float
-            Define the force coefficient to be utilized in the loss function. A
-            coefficient > 0 indicates force training is turned on.
-        cores: int
-            Number of cores to parallelize across for fingerprint computation
-        criterion: object
-            Specify the loss function to be optimized.
-            default: CustomMSELoss
-        num_layers: int
-            Number of layers in each atomic neural network.
-        num_nodes: int
-            Number of nodes in each layer in each atomic neural network.
-        learning_rater: float
-            Define the model learning rate.
-        epochs: int
-            Number of training epochs to use.
-        train_split: float or int
-            Training split to be used for validation. If float, corresponding
-            proportion of training set will be used. If int, k-fold cross
-            validation will be used."""
+            al_convergence: Dict.
+                Dictionary of stopping criteria parameters. Currently only # of
+                iterations and spot verification is used:
+
+                    Iterations: {"method": "iter", "num_iterations": int}
+                        Where "num_iteratiosn" is the number of iterations the AL
+                        framework is run before termination.
+                    Spot: {"method": "spot", "num2verify": int }
+                        Where "num2verify" is the number of points necessary to be randomly sampled
+                        and verified with DFT before convergence.
+            samples_to_retrain. integer.
+                Number of samples to query each iteration
+                of the active learning loop.
+            Gs: dictionary.
+                Dictionary of symmetry functions to be used for
+                fingerprinting.
+            morse: boolean
+                Delta-ML model with morse potential to be used.
+            morse_params: dictionary
+                If morse True, define morse potential parameters for all elements in
+                system.
+            forcetraining: boolean
+                Use forces in training scheme alongside energies.
+            force_coefficient: float
+                Define the force coefficient to be utilized in the loss function. A
+                coefficient > 0 indicates force training is turned on.
+            cores: int
+                Number of cores to parallelize across for fingerprint computation
+            criterion: object
+                Specify the loss function to be optimized.
+                default: CustomMSELoss
+            num_layers: int
+                Number of layers in each atomic neural network.
+            num_nodes: int
+                Number of nodes in each layer in each atomic neural network.
+            learning_rater: float
+                Define the model learning rate.
+            epochs: int
+                Number of training epochs to use.
+            train_split: float or int
+                Training split to be used for validation. If float, corresponding
+                proportion of training set will be used. If int, k-fold cross
+                validation will be used."""
+
+        al_convergence = training_params["al_convergence"]
+        samples_to_retrain = training_params["samples_to_retrain"]
+        test_split = training_params["test_split"]
 
         sample_candidates = None
         terminate = False
         iteration = 0
 
         while not terminate:
+            #TODO train_split check for initial starting images
+            if iteration == 0:
+                training_params["test_split"] = 0
             if iteration > 0:
                 # active learning random scheme
                 self.images = self.al_random(
                     self.images, sample_candidates, samples_to_retrain
                 )
+                training_params["test_split"] = test_split
             name = self.filename + "_iter_{}".format(iteration)
             # train ml calculator
             self.ml_calc = self.train_calc(
                 images=self.images,
-                Gs=Gs,
-                forcetraining=forcetraining,
-                cores=cores,
-                criterion=criterion,
-                num_layers=num_layers,
-                num_nodes=num_nodes,
-                force_coefficient=force_coefficient,
-                learning_rate=learning_rate,
-                epochs=epochs,
-                train_split=train_split,
-                morse=morse,
-                morse_params=morse_params,
+                training_params=training_params
             )
 
             # run generating function using trained ml calculator
@@ -348,10 +335,8 @@ class AtomisticActiveLearning(Calculator):
 
     def termination_criteria(self, method='iter', **kwargs):
         """Criteria for AL termination
-
        Parameters
        ----------
-
        method: str
             Method for termination of active learning loop.
 

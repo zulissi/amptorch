@@ -1,5 +1,6 @@
 import numpy as np
 import random
+import torch
 
 import ase
 from ase.calculators.calculator import Calculator
@@ -16,7 +17,6 @@ from amptorch.model import CustomMSELoss
 if __name__ == "__main__":
 	random.seed(0)
 	# Define initial set of images, can be as few as 1. If 1, make sure to
-	# change train_split to 0.
 	slab = fcc100("Cu", size=(3, 3, 3))
 	ads = molecule("C")
 	add_adsorbate(slab, ads, 3, offset=(1, 1))
@@ -47,6 +47,26 @@ if __name__ == "__main__":
 		"Cu": {"re": 2.168, "D": 3.8386, "sig": 1.696},
 	}
 
+	training_params = {
+        "al_convergence": {"method": "iter", "num_iterations": 3},
+        "samples_to_retrain": 5,
+        "Gs": Gs,
+        "morse": True,
+        "morse_params": morse_params,
+        "forcetraining": True,
+        "cores": 10,
+        "optimizer": torch.optim.LBFGS,
+        "batch_size": 1000,
+        "criterion": CustomMSELoss,
+        "num_layers": 3,
+        "num_nodes": 20,
+        "force_coefficient": 0.04,
+        "learning_rate": 1e-1,
+        "epochs": 100,
+        "test_split": 0.3,
+        "shuffle": False
+	}
+
 	# Define AL calculator
 	al_calc = AtomisticActiveLearning(
 		parent_calc=EMT(), images=images, filename="relax_example",
@@ -60,20 +80,7 @@ if __name__ == "__main__":
 			fmax=0.05,
 			steps=50,
 		),
-		al_convergence = {"method": "iter", "num_iterations": 3},
-		samples_to_retrain=5,
-		Gs=Gs,
-		morse=True,
-		morse_params=morse_params,
-		forcetraining=True,
-		cores=10,
-		criterion=CustomMSELoss,
-		num_layers=3,
-		num_nodes=20,
-		force_coefficient=0.04,
-		learning_rate=1e-1,
-		epochs=100,
-		train_split=0,
+        training_params=training_params
 	)
 
 
