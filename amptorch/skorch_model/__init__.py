@@ -112,7 +112,7 @@ class AMP(Calculator):
         # TODO Store training settings (scalings, etc.) alongside model
         # parameters. Necessary for more efficient loading.
         self.model.fit(self.training_data, None)
-        log_results(self.model, self.log)
+        #log_results(self.model, self.log)
         if os.path.exists(self.label):
             if overwrite is False:
                 print("Could not save! File already exists")

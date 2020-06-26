@@ -95,10 +95,10 @@ class BPNN(nn.Module):
         P - Length of fingerprint"""
 
         with torch.enable_grad():
-            input_data = inputs[0]
-            batch_size = inputs[1]
-            batch_elements = inputs[2]
-            rearange = inputs[-1]
+            
+            input_data, batch_size, batch_elements, fprimes, rearange, num_atoms = inputs
+            
+
             if self.device == 'cpu':
                 energy_pred = torch.zeros(batch_size, 1).to(self.device)
             else:
@@ -106,7 +106,6 @@ class BPNN(nn.Module):
             force_pred = torch.tensor([])
             # Constructs an Nx1 empty tensor to store element energy contributions
             if self.forcetraining:
-                fprimes = inputs[-2]
                 dE_dFP = torch.tensor([]).to(self.device)
                 idx = torch.tensor([]).to(self.device)
             for index, element in enumerate(batch_elements):
@@ -114,7 +113,15 @@ class BPNN(nn.Module):
                 model_inputs.requires_grad = True
                 contribution_index = torch.tensor(input_data[element][1]).to(self.device)
                 atomwise_outputs = self.elementwise_models[element].forward(model_inputs)
+#                 print(model_inputs)
+#                 print(atomwise_outputs)
+#                 print(energy_pred)
+                
                 energy_pred.index_add_(0, contribution_index, atomwise_outputs)
+        
+#                 energy_pred = torch.div(energy_pred, num_atoms)
+                
+                
                 if self.forcetraining:
                     gradients = grad(
                         energy_pred,
@@ -169,9 +176,10 @@ class CustomMSELoss(nn.Module):
         energy_pred = prediction[0]
         energy_targets_per_atom = target[0]
         num_atoms = target[1]
-        MSE_loss = nn.MSELoss(reduction="sum")
-        energy_pred_per_atom = torch.div(energy_pred, num_atoms)
-        energy_loss = MSE_loss(energy_pred_per_atom, energy_targets_per_atom)
+#         energy_pred_per_atom = torch.div(energy_pred, num_atoms)
+        
+        MSE_loss = nn.MSELoss(reduction="mean")
+        energy_loss = MSE_loss(energy_pred, energy_targets_per_atom)
 
         if self.alpha > 0:
             force_pred = prediction[1]
@@ -206,9 +214,9 @@ class MAELoss(nn.Module):
         energy_targets = target[0]
         num_atoms = target[1]
         MAE_loss = nn.L1Loss(reduction="sum")
-        energy_per_atom = torch.div(energy_pred, num_atoms)
-        targets_per_atom = torch.div(energy_targets, num_atoms)
-        energy_loss = MAE_loss(energy_per_atom, targets_per_atom)
+#         energy_per_atom = torch.div(energy_pred, num_atoms)
+        #targets_per_atom = torch.div(energy_targets, num_atoms)
+        energy_loss = MAE_loss(energy_pred, targets_per_atom)
 
         if self.alpha > 0:
             force_pred = prediction[1]

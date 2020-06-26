@@ -4,6 +4,7 @@ from skorch.utils import to_numpy
 import torch
 from torch.nn import MSELoss, L1Loss
 import numpy as np
+from amptorch.data_preprocess import collate_amp
 
 
 def target_extractor(y):
@@ -13,23 +14,37 @@ def target_extractor(y):
         else (to_numpy(y[0]), to_numpy(y[1]), to_numpy(y[2]))
     )
 
+
 def energy_score(net, X, y):
-    mse_loss = MSELoss(reduction="sum")
+    mse_loss = MSELoss(reduction="mean")
     energy_pred, _ = net.forward(X)
+    
+    # Get the energies from the dataset (don't use the cache)
+    collate_data = collate_amp(X)
+    y = collate_data[1]
+    num_atoms = collate_data[0][5]
+
+    
+    # Get the scalings
     device = energy_pred.device
     if not hasattr(X, "scalings"):
         X = X.dataset
     scale = X.scalings[-1]
-    num_atoms = torch.FloatTensor(np.concatenate(y[1::3])).reshape(-1, 1).to(device)
-    dataset_size = len(energy_pred)
-    energy_targets_per_atom = torch.tensor(np.concatenate(y[0::3])).to(device).reshape(-1, 1)
-    energy_targets_per_atom = scale.denorm(energy_targets_per_atom)
-    energy_preds_per_atom = torch.div(energy_pred, num_atoms)
-    energy_preds_per_atom = scale.denorm(energy_preds_per_atom)
-    energy_loss = mse_loss(energy_preds_per_atom, energy_targets_per_atom)
-    energy_loss /= dataset_size
+    
+    # Get the num atoms from y
+#     num_atoms = torch.FloatTensor(np.concatenate(y[1::3])).reshape(-1, 1).to(device)
+
+    energy_targets = torch.tensor(np.concatenate(y[0::3])).to(device).reshape(-1, 1)
+    energy_targets = scale.denorm(energy_targets)
+    
+#     energy_pred_per_atom = torch.div(energy_pred, num_atoms)
+    energy_pred = scale.denorm(energy_pred)
+
+    energy_loss = mse_loss(energy_pred, energy_targets)
+    #energy_loss /= dataset_size
     energy_rmse = torch.sqrt(energy_loss)
     return energy_rmse
+
 
 def forces_score(net, X, y):
     mse_loss = MSELoss(reduction='none')

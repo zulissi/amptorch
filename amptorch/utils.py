@@ -10,6 +10,8 @@ import numpy as np
 from ase import io
 from ase.db import connect
 from simple_nn.features.symmetry_function import Symmetry_function
+from .simple_nn_specific_atoms import Symmetry_function_customized
+from sklearn.preprocessing import StandardScaler
 
 def hash_images(images, Gs=None, log=None, ordered=False):
     """ Converts input images -- which may be a list, a trajectory file, or
@@ -95,6 +97,37 @@ def calculate_fingerprints_range(fp, images):
         fprange[key] = value
     return fprange
 
+def calculate_fingerprints_scaler(fp, images):
+    """Calculates the range for the fingerprints corresponding to images,
+    stored in fp. fp is a fingerprints object with the fingerprints data
+    stored in a dictionary-like object at fp.fingerprints. (Typically this
+    is a .utilties.Data structure.) images is a hashed dictionary of atoms
+    for which to consider the range.
+
+    In image-centered mode, returns an array of (min, max) values for each
+    fingerprint. In atom-centered mode, returns a dictionary of such
+    arrays, one per element.
+    """
+    if fp.parameters.mode == "image-centered":
+        raise NotImplementedError()
+    elif fp.parameters.mode == "atom-centered":
+        
+        fp_elements = {}
+        for hash in images.keys():
+            imagefingerprints = fp.fingerprints[hash]
+            for element, fingerprint in imagefingerprints:
+                if element not in fp_elements:
+                    fp_elements[element]=[fingerprint]
+                else:
+                    fp_elements[element].append(fingerprint)
+                    
+        scalers={}
+        
+        for element in fp_elements:
+            scalers[element] = StandardScaler().fit(fp_elements[element])
+
+    return scalers
+
 
 def make_params_file(
     elements, fp_dir, etas, rs_s, g4_eta=4, cutoff=6.5, g4_zeta=[1.0, 4.0], g4_gamma=[1, -1]
@@ -154,7 +187,7 @@ def make_params_file(
                                 )
 
 
-def reorganize_simple_nn_derivative(image, dx_dict):
+def reorganize_simple_nn_derivative(image, specific_atoms, dx_dict):
     """
     reorganizes the fingerprint derivatives from simplen_nn into
     amp format
@@ -167,11 +200,19 @@ def reorganize_simple_nn_derivative(image, dx_dict):
     # TODO check for bugs
     d = OrderedDict()
     sym_dict = OrderedDict()
-    syms = image.get_chemical_symbols()
-    for sym in syms:
-        sym_dict[sym] = []
-    for i, sym in enumerate(syms):
-        sym_dict[sym].append(i)
+    if specific_atoms is True:
+        syms = image.get_chemical_symbols()
+        for sym in syms:
+            sym_dict[sym] = []
+        for i, sym in enumerate(syms):
+            if image[i].tag == 1:
+                sym_dict[sym].append(i)
+    else:
+        syms = image.get_chemical_symbols()
+        for sym in syms:
+            sym_dict[sym] = []
+        for i, sym in enumerate(syms):
+            sym_dict[sym].append(i)
     # the structure is:
     # [elements][atom i][symetry function #][atom j][derivitive in direction]
     for element, full_arr in dx_dict.items():
@@ -194,7 +235,7 @@ def reorganize_simple_nn_derivative(image, dx_dict):
     return d
 
 
-def reorganize_simple_nn_fp(image, x_dict):
+def reorganize_simple_nn_fp(image, specific_atoms, x_dict):
     """
     reorganizes the fingerprints from simplen_nn into
     amp format
@@ -209,15 +250,28 @@ def reorganize_simple_nn_fp(image, x_dict):
     # [elements][atom i][symetry function #][fp]
     fp_l = []
     sym_dict = OrderedDict()
-    syms = image.get_chemical_symbols()
-    for sym in syms:
-        sym_dict[sym] = []
-    for i, sym in enumerate(syms):
-        sym_dict[sym].append(i)
-    for i, sym in enumerate(syms):
-        simple_nn_index = sym_dict[sym].index(i)
-        fp = x_dict[sym][simple_nn_index]
-        fp_l.append((sym, list(fp)))
+    if specific_atoms is True:
+        syms = image.get_chemical_symbols()
+        for sym in syms:
+            sym_dict[sym] = []
+        for i, sym in enumerate(syms):
+            if image[i].tag == 1:
+                sym_dict[sym].append(i)
+        for i, sym in enumerate(syms):
+            if image[i].tag == 1:
+                simple_nn_index = sym_dict[sym].index(i)
+                fp = x_dict[sym][simple_nn_index]
+                fp_l.append((sym, list(fp)))
+    else:
+        syms = image.get_chemical_symbols()
+        for sym in syms:
+            sym_dict[sym] = []
+        for i, sym in enumerate(syms):
+            sym_dict[sym].append(i)
+        for i, sym in enumerate(syms):
+            simple_nn_index = sym_dict[sym].index(i)
+            fp = x_dict[sym][simple_nn_index]
+            fp_l.append((sym, list(fp)))
     return fp_l
 
 
@@ -282,7 +336,7 @@ def factorize_data(traj, Gs):
     return new_traj
 
 
-def convert_simple_nn_fps(traj, Gs, cores, label, save, delete_old=True):
+def convert_simple_nn_fps(traj, Gs, specific_atoms, cores, label, save, delete_old=True, calculate_derivatives=True):
     from multiprocessing import Pool
 
     # make the directories
@@ -299,10 +353,10 @@ def convert_simple_nn_fps(traj, Gs, cores, label, save, delete_old=True):
     fp_dir = "data"+label
     if len(traj) > 1:
         with Pool(cores) as p:
-            l_trajs = [image + (Gs, label, fp_dir) for image in l_trajs]
+            l_trajs = [image + (Gs, specific_atoms, label, fp_dir, False) for image in l_trajs]
             p.map(reorganize, l_trajs)
     else:
-        image = (0, traj[0], Gs, label, fp_dir)
+        image = (0, traj[0], Gs, specific_atoms, label, fp_dir, True)
         fps, fp_primes = reorganize(image, save=save)
     if delete_old:
         os.rmdir("./data"+label)
@@ -312,20 +366,28 @@ def convert_simple_nn_fps(traj, Gs, cores, label, save, delete_old=True):
         return fps, fp_primes
 
 
-def reorganize(inp, delete_old=True, save=True):
-    i, image, Gs, label, fp_dir = inp
+def reorganize(inp, delete_old=True, save=True, calculate_derivatives=False):
+    i, image, Gs, specific_atoms, label, fp_dir, return_ = inp
     pic = pickle.load(open(fp_dir+"/data{}.pickle".format(i + 1), "rb"))
     im_hash = get_hash(image, Gs)
-    x_list = reorganize_simple_nn_fp(image, pic["x"])
-    x_der_dict = reorganize_simple_nn_derivative(image, pic["dx"])
+    x_list = reorganize_simple_nn_fp(image, specific_atoms, pic["x"])
+    
+    if calculate_derivatives:
+        x_der_dict = reorganize_simple_nn_derivative(image, specific_atoms, pic["dx"])
     if save:
         pickle.dump(x_list, open("./amp-data-fingerprints.ampdb/loose/" + im_hash, "wb"))
-        pickle.dump(
+        if calculate_derivatives:
+            pickle.dump(
             x_der_dict, open("./amp-data-fingerprint-primes.ampdb/loose/" + im_hash, "wb")
-        )
+            )
     if delete_old:  # in case disk space is an issue
+        if os.path.exists(os.path.join("./data" + label,'simple_nn_log')):
+            os.remove(os.path.join("./data" + label,'simple_nn_log'))
         os.remove(fp_dir+"/data{}.pickle".format(i + 1))
-    return x_list, x_der_dict
+    if return_:
+        return x_list, x_der_dict
+    else:
+        return 0,0
 
 
 class DummySimple_nn(object):
@@ -343,7 +405,7 @@ class DummySimple_nn(object):
         }
         self.logfile = open(dir+"/simple_nn_log", "w")
 
-def make_simple_nn_fps(traj, Gs, label, clean_up_directory=True, elements="all"):
+def make_simple_nn_fps(traj, Gs, specific_atoms, label, clean_up_directory=True, elements="all"):
     """
     generates descriptors using simple_nn. The files are stored in the
     ./data folder. These descriptors will be in the simple_nn form and
@@ -404,7 +466,10 @@ def make_simple_nn_fps(traj, Gs, label, clean_up_directory=True, elements="all")
         make_params_file(atom_types, fp_dir, *descriptors)
 
         # build the descriptor object
-        descriptor = Symmetry_function(fp_dir=fp_dir)
+        if specific_atoms is True:
+            descriptor = Symmetry_function_customized(fp_dir=fp_dir)
+        else:
+            descriptor = Symmetry_function(fp_dir=fp_dir)
         params = {a: "params_{}".format(a) for a in atom_types}
 
         descriptor.inputs = {
@@ -437,29 +502,33 @@ def make_simple_nn_fps(traj, Gs, label, clean_up_directory=True, elements="all")
                 "simple_nn_log",
             ]
             files += list(params.values())
+            dummy_class.logfile.close()
             for file in files:
                 os.remove(fp_dir+"/"+file)
         calculated = True
     return traj, calculated
 
-def stored_fps(traj, Gs):
+def stored_fps(traj, Gs, calculate_derivatives=False):
     image_hash = get_hash(traj[0], Gs)
     with open("amp-data-fingerprints.ampdb/loose/"+image_hash, "rb") as f:
         fps = load(f)
-    with open("amp-data-fingerprint-primes.ampdb/loose/"+image_hash, "rb") as f:
-        fp_primes = load(f)
+    if calculate_derivatives:
+        with open("amp-data-fingerprint-primes.ampdb/loose/"+image_hash, "rb") as f:
+            fp_primes = load(f)
+    else:
+        fp_primes = None
     return fps, fp_primes
 
-def make_amp_descriptors_simple_nn(atoms, Gs, elements, cores, label, save=True):
+def make_amp_descriptors_simple_nn(atoms, Gs, elements, cores, label, save=True, specific_atoms=False, calculate_derivatives=True):
     """
     uses simple_nn to make descriptors in the amp format.
     Only creates the same symmetry functions for each element
     for now.
     """
-    traj, calculated = make_simple_nn_fps(atoms, Gs, elements=elements,
+    traj, calculated = make_simple_nn_fps(atoms, Gs, specific_atoms, elements=elements,
             label=label, clean_up_directory=True)
     if calculated:
-        fps, fp_primes = convert_simple_nn_fps(traj, Gs, cores, label, save, delete_old=True)
+        fps, fp_primes = convert_simple_nn_fps(traj, Gs, specific_atoms, cores, label, save, delete_old=True, calculate_derivatives=calculate_derivatives)
         return fps, fp_primes
     if save is False and calculated is False:
         fps, fp_primes = stored_fps(atoms, Gs)

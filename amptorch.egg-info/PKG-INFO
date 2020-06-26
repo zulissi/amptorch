@@ -1,0 +1,10 @@
+Metadata-Version: 1.0
+Name: amptorch
+Version: 0.1
+Summary: A Pytorch Implementation of AMP
+Home-page: https://github.com/ulissigroup/amptorch
+Author: Muhammed Shuaibi
+Author-email: mshuaibi@andrew.cmu.edu
+License: UNKNOWN
+Description: UNKNOWN
+Platform: UNKNOWN
